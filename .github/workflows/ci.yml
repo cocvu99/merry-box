@@ -1,0 +1,45 @@
+name: CI pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+        
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      
+      - name: Build project
+        run: go build -v -o /dev/null ./...
+      
+      - name: Testing project
+        run: go test ./...
+
+      - name: Check code formatting 
+        if: github.event_name == 'pull_request'
+        run: |
+          files=$(gofmt -s -l .)
+
+          if [ -n "$files" ]; then
+            echo "Code is NOT formatted"
+            echo "$files"
+            exit 1
+          fi
+      
+      - name: Examines source code and report
+        if: ${{ github.event_name == 'pull_request' }}
+        run: go vet ./...
+      
+      - name: Announcement
+        if: ${{ github.ref == 'refs/heads/main' }}
+        run: echo "This commit is ready to be deploy on branch $GITHUB_REF"
