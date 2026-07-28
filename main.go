@@ -23,29 +23,26 @@ func newFileStore() *fileStore {
 
 // put stores content under name, overwriting any existing entry.
 func (s *fileStore) put(name string, content []byte) {
-	// TODO:
-	// A Go map is NOT safe for concurrent writes — two goroutines writing at
-	// once will panic. Protect the write with the mutex.
-	// Hint: s.mu.Lock() ... defer s.mu.Unlock(), then assign into s.files.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.files[name] = content
 }
 
 // get returns the content for name and whether it was found.
 func (s *fileStore) get(name string) ([]byte, bool) {
-	// TODO:
-	// A read can use the read-lock (allows many concurrent readers).
-	// Hint: s.mu.RLock() ... defer s.mu.RUnlock().
-	// Hint: the comma-ok form `v, ok := s.files[name]` tells you if it exists.
-	return nil, false
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	content, ok := s.files[name]
+	return content, ok
 }
 
 // delete removes name from the store and reports whether it existed.
 func (s *fileStore) delete(name string) bool {
-	// TODO:
-	// This is a write, so use the full Lock (not RLock).
-	// Check existence first (comma-ok), then call the builtin delete(s.files, name).
-	// Return whether the key existed BEFORE deletion — the handler needs this
-	// to decide 204 vs 404.
-	return false
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, existed := s.files[name]
+	delete(s.files, name)
+	return existed
 }
 
 func main() {
@@ -60,35 +57,44 @@ func main() {
 
 	// --- Upload: raw body + ?name=... (multipart parsing comes at a later milestone). ---
 	mux.HandleFunc("POST /files", func(w http.ResponseWriter, r *http.Request) {
-		// TODO:
-		// 1. Read the file name from the query string: r.URL.Query().Get("name").
-		//    If it is empty, respond http.StatusBadRequest (400) and return.
-		// 2. Read the whole body: body, err := io.ReadAll(r.Body).
-		//    (We knowingly load it all into RAM here; a later milestone switches
-		//    to streaming so large files do not blow up memory.)
-		//    On error, respond http.StatusInternalServerError (500) and return.
-		// 3. store.put(name, body), then respond http.StatusCreated (201).
-		_ = io.ReadAll // remove this line once you use io.ReadAll
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "missing required query parameter: name", http.StatusBadRequest)
+			return
+		}
+		// We knowingly load the whole body into RAM here; a later milestone
+		// switches to streaming so large files do not blow up memory.
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "failed to read request body", http.StatusInternalServerError)
+			return
+		}
+		store.put(name, body)
+		w.WriteHeader(http.StatusCreated)
 	})
 
 	// --- Retrieve by name. ---
 	mux.HandleFunc("GET /files/{name}", func(w http.ResponseWriter, r *http.Request) {
-		// TODO:
-		// 1. name := r.PathValue("name")
-		// 2. content, ok := store.get(name)
-		// 3. if !ok -> respond http.StatusNotFound (404) and return.
-		// 4. otherwise w.Write(content) (status defaults to 200).
+		name := r.PathValue("name")
+		content, ok := store.get(name)
+		if !ok {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write(content)
 	})
 
 	// --- Delete by name. ---
+	// DELETE is NOT silently idempotent here: deleting a missing file returns
+	// 404 so clients can tell "already gone" from "never existed". Documented
+	// choice per the challenge ("idempotent or not? pick and document").
 	mux.HandleFunc("DELETE /files/{name}", func(w http.ResponseWriter, r *http.Request) {
-		// TODO:
-		// 1. name := r.PathValue("name")
-		// 2. existed := store.delete(name)
-		// 3. Decide the semantics you documented:
-		//    - if !existed -> http.StatusNotFound (404)
-		//    - otherwise   -> http.StatusNoContent (204)
-		//    (This is the idempotency choice we discussed — own it and document it.)
+		name := r.PathValue("name")
+		if !store.delete(name) {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	addr := ":8080"
