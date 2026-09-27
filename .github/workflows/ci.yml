@@ -14,7 +14,7 @@ jobs:
     steps:
       # 1. Checkout your code
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # 2. Set up Go environment
       - name: Set up Go
